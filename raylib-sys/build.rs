@@ -37,60 +37,69 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=CoreVideo");
     }
 
-    println!("cargo:rustc-link-lib=static=raylib");
-
-    if !pkg_config::Config::new()
+    if pkg_config::Config::new()
         .atleast_version("2.0.0")
         .probe("raylib")
         .is_ok()
     {
-        let source_url =
-            url::Url::parse("https://github.com/raysan5/raylib/archive/2.0.0.tar.gz").unwrap();
-
-        let download_dir = PathBuf::from(env::var("OUT_DIR").unwrap()).join("download");
-
-        if !download_dir.exists() {
-            fs::create_dir(&download_dir).unwrap();
-        }
-
-        let source_tarball_filename = source_url.path_segments().unwrap().last().unwrap();
-        let source_tarball_path = download_dir.join(source_tarball_filename);
-
-        if !source_tarball_path.exists() {
-            let f = File::create(&source_tarball_path).unwrap();
-            let mut writer = BufWriter::new(f);
-            let mut easy = curl::easy::Easy::new();
-            easy.url(source_url.as_str()).unwrap();
-            easy.follow_location(true).unwrap();
-            easy.write_function(move |data| Ok(writer.write(data).unwrap()))
-                .unwrap();
-            easy.perform().unwrap();
-
-            let response_code = easy.response_code().unwrap();
-            if response_code != 200 {
-                panic!(
-                    "Unexpected response code {} for {}",
-                    response_code, source_url
-                );
-            }
-        }
-
-        let extract_dir = download_dir.join("raylib-2.0.0");
-        if !extract_dir.exists() {
-            let file = File::open(source_tarball_path).unwrap();
-            let unzipped = flate2::read::GzDecoder::new(file);
-            let mut archive = tar::Archive::new(unzipped);
-            archive.unpack(download_dir).unwrap();
-        }
-
-        let dst = cmake::Config::new(extract_dir)
-            .define("BUILD_EXAMPLES", "OFF")
-            .define("BUILD_GAMES", "OFF")
-            .build();
-
-        println!(
-            "cargo:rustc-link-search=native={}",
-            dst.join("lib").display()
-        );
+        // no need to build if we already have a system raylib
+        return;
     }
+
+    let source_url =
+        url::Url::parse("https://github.com/raysan5/raylib/archive/2.0.0.tar.gz").unwrap();
+
+    let download_dir = PathBuf::from(env::var("OUT_DIR").unwrap()).join("download");
+
+    if !download_dir.exists() {
+        fs::create_dir(&download_dir).unwrap();
+    }
+
+    let source_tarball_filename = source_url.path_segments().unwrap().last().unwrap();
+    let source_tarball_path = download_dir.join(source_tarball_filename);
+
+    if !source_tarball_path.exists() {
+        let f = File::create(&source_tarball_path).unwrap();
+        let mut writer = BufWriter::new(f);
+        let mut easy = curl::easy::Easy::new();
+        easy.url(source_url.as_str()).unwrap();
+        easy.follow_location(true).unwrap();
+        easy.write_function(move |data| Ok(writer.write(data).unwrap()))
+            .unwrap();
+        easy.perform().unwrap();
+
+        let response_code = easy.response_code().unwrap();
+        if response_code != 200 {
+            panic!(
+                "Unexpected response code {} for {}",
+                response_code, source_url
+            );
+        }
+    }
+
+    let extract_dir = download_dir.join("raylib-2.0.0");
+    if !extract_dir.exists() {
+        let file = File::open(source_tarball_path).unwrap();
+        let unzipped = flate2::read::GzDecoder::new(file);
+        let mut archive = tar::Archive::new(unzipped);
+        archive.unpack(download_dir).unwrap();
+    }
+
+    let mut config = cmake::Config::new(extract_dir);
+    config.define("BUILD_EXAMPLES", "OFF");
+    config.define("BUILD_GAMES", "OFF");
+
+    if cfg!(target_os = "macos") {
+        config.define("MACOS_FATLIB", "OFF"); // rust can't handle universal binaries? https://github.com/rust-lang/rust/issues/50220
+        config.generator("Ninja"); // default doesn't work?
+    }
+
+    let build_destination = config.build();
+
+    println!(
+        "cargo:rustc-link-search=native={}",
+        build_destination.join("lib").display()
+    );
+
+    println!("cargo:rustc-link-lib=static=raylib");
 }
